@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micah Kennedy - 3D Portfolio</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Arial', sans-serif; overflow: hidden; background: #000; }
+        #app { width: 100vw; height: 100vh; position: relative; }
+        #three-canvas { display: block; width: 100%; height: 100%; }
+        
+        #loading-screen {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .loader { text-align: center; color: white; }
+        .loader h2 { margin-bottom: 20px; font-size: 24px; }
+        .loading-bar { width: 200px; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; overflow: hidden; }
+        .loading-bar::after {
+            content: ''; display: block; width: 100%; height: 100%; background: white;
+            transform: translateX(-100%); animation: loading 2s ease-in-out infinite;
+        }
+        @keyframes loading {
+            0% { transform: translateX(-100%); }
+            50% { transform: translateX(0%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        #ui-overlay { position: fixed; top: 30px; left: 30px; color: white; z-index: 100; pointer-events: none; }
+        #ui-overlay h1 { font-size: 28px; margin-bottom: 5px; }
+        #ui-overlay p { font-size: 14px; opacity: 0.8; }
+        
+        .content-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(5px); z-index: 500;
+            display: flex; justify-content: center; align-items: center; transition: all 0.3s ease;
+        }
+        .content-overlay.hidden { opacity: 0; pointer-events: none; transform: scale(0.9); }
+        .content-panel {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px;
+            padding: 30px; max-width: 80vw; max-height: 80vh; overflow-y: auto;
+            position: relative; box-shadow: 0 20px 40px rgba(0,0,0,0.3); color: white;
+        }
+        .close-btn {
+            position: absolute; top: 15px; right: 20px; background: none; border: none;
+            font-size: 30px; color: white; cursor: pointer; transition: transform 0.2s ease;
+        }
+        .close-btn:hover { transform: scale(1.2); }
+        .content-section { animation: slideIn 0.5s ease; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .content-section h2 { font-size: 28px; margin-bottom: 20px; text-align: center; }
+        .content-section h3 { font-size: 20px; margin: 15px 0 10px 0; color: #ffd700; }
+        .content-section p { line-height: 1.6; margin-bottom: 15px; }
+        .skills-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 20px 0; }
+        .skill-tag { background: rgba(255,255,255,0.2); padding: 8px 12px; border-radius: 20px; text-align: center; font-size: 14px; }
+        .project-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }
+        .project-card { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); }
+        .project-card h4 { color: #ffd700; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <canvas id="three-canvas"></canvas>
+        <div id="loading-screen">
+            <div class="loader">
+                <h2>Loading Portfolio...</h2>
+                <div class="loading-bar"></div>
+            </div>
+        </div>
+        <div id="ui-overlay">
+            <h1>Micah Kennedy</h1>
+            <p>Senior Portfolio - Explore my workspace</p>
+        </div>
+        <div id="content-overlay" class="content-overlay hidden">
+            <div class="content-panel">
+                <button class="close-btn">&times;</button>
+                <div id="content-body"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.158.0/build/three.module.js",
+            "three/examples/jsm/controls/OrbitControls.js": "https://unpkg.com/three@0.158.0/examples/jsm/controls/OrbitControls.js"
+        }
+    }
+    </script>
+    
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+        class InteractionManager {
+            constructor(scene, camera, renderer) {
+                this.scene = scene;
+                this.camera = camera;
+                this.renderer = renderer;
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.clickableObjects = [];
+                
+                this.contentOverlay = document.getElementById('content-overlay');
+                this.contentBody = document.getElementById('content-body');
+                this.closeBtn = document.querySelector('.close-btn');
+                
+                renderer.domElement.addEventListener('click', (event) => this.onMouseClick(event));
+                renderer.domElement.addEventListener('mousemove', (event) => this.onMouseMove(event));
+                this.closeBtn.addEventListener('click', () => this.hideContent());
+                
+                this.contentOverlay.addEventListener('click', (event) => {
+                    if (event.target === this.contentOverlay) {
+                        this.hideContent();
+                    }
+                });
+            }
+            
+            addClickableObject(object, type, data = {}) {
+                object.userData = { type, ...data };
+                this.clickableObjects.push(object);
+                object.material.transparent = true;
+            }
+            
+            onMouseMove(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.clickableObjects);
+                
+                if (intersects.length > 0) {
+                    document.body.style.cursor = 'pointer';
+                    intersects[0].object.material.opacity = 0.8;
+                } else {
+                    document.body.style.cursor = 'default';
+                    this.clickableObjects.forEach(obj => {
+                        obj.material.opacity = 1.0;
+                    });
+                }
+            }
+            
+            onMouseClick(event) {
+                this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+                
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                const intersects = this.raycaster.intersectObjects(this.clickableObjects);
+                
+                if (intersects.length > 0) {
+                    const clickedObject = intersects[0].object;
+                    this.handleObjectClick(clickedObject);
+                }
+            }
+            
+            handleObjectClick(object) {
+                const { type } = object.userData;
+                
+                switch(type) {
+                    case 'laptop': this.showGamesSection(); break;
+                    case 'phone': this.showAppsSection(); break;
+                    case 'notebook': this.showNotebooksSection(); break;
+                    case 'businessCard': this.showAboutSection(); break;
+                    case 'folder': this.showProjectsSection(); break;
+                    case 'resume': this.showResumeSection(); break;
+                    case 'ipad': this.showArtworkSection(); break;
+                }
+            }
+            
+            showContent(content) {
+                this.contentBody.innerHTML = content;
+                this.contentOverlay.classList.remove('hidden');
+            }
+            
+            hideContent() {
+                this.contentOverlay.classList.add('hidden');
+            }
+            
+            showGamesSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>🎮 Games I've Created</h2>
+                        <div class="project-grid">
+                            <div class="project-card">
+                                <h4>Unity Game #1</h4>
+                                <p>Description of your first Unity game. What mechanics did you implement? What was challenging?</p>
+                                <p><strong>Tech:</strong> Unity, C#</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Unity Game #2</h4>
+                                <p>Description of your second Unity game. How did you improve from the first one?</p>
+                                <p><strong>Tech:</strong> Unity, C#</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Game Concept</h4>
+                                <p>A game idea you're working on or planning to develop.</p>
+                                <p><strong>Status:</strong> In Development</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showAppsSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>📱 Figma App Designs</h2>
+                        <div class="project-grid">
+                            <div class="project-card">
+                                <h4>App Design #1</h4>
+                                <p>Description of your first Figma app design. What problem does it solve?</p>
+                                <p><strong>Focus:</strong> UI/UX Design</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>App Design #2</h4>
+                                <p>Another app concept you've designed in Figma.</p>
+                                <p><strong>Focus:</strong> Mobile Interface</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Design System</h4>
+                                <p>Components and design patterns you've created.</p>
+                                <p><strong>Tool:</strong> Figma</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showNotebooksSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>📔 Digital Notebooks</h2>
+                        <div class="project-grid">
+                            <div class="project-card">
+                                <h4>Class Notebook #1</h4>
+                                <p>Notes and projects from your first class.</p>
+                                <p><strong>Subject:</strong> Web Development</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Class Notebook #2</h4>
+                                <p>Documentation of your learning journey.</p>
+                                <p><strong>Subject:</strong> Game Development</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Research Notes</h4>
+                                <p>Your research and exploration notes.</p>
+                                <p><strong>Focus:</strong> 3D Development</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showAboutSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>👋 About Micah Kennedy</h2>
+                        <h3>Senior Developer & Designer</h3>
+                        <p>I'm a passionate senior student specializing in web development, game development, and 3D experiences. I love creating interactive digital experiences that push the boundaries of what's possible on the web.</p>
+                        
+                        <h3>Skills & Technologies</h3>
+                        <div class="skills-grid">
+                            <div class="skill-tag">HTML/CSS</div>
+                            <div class="skill-tag">JavaScript</div>
+                            <div class="skill-tag">Three.js</div>
+                            <div class="skill-tag">Unity</div>
+                            <div class="skill-tag">C#</div>
+                            <div class="skill-tag">Figma</div>
+                            <div class="skill-tag">Blender</div>
+                            <div class="skill-tag">React</div>
+                            <div class="skill-tag">GSAP</div>
+                        </div>
+                        
+                        <h3>What I'm Learning</h3>
+                        <p>Currently expanding my skills in Three.js, React, and GSAP to create more immersive web experiences. Always excited to learn new technologies and tackle challenging projects!</p>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showProjectsSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>📁 School Projects</h2>
+                        <p>Here are the projects I've worked on during my senior year:</p>
+                        <div class="project-grid">
+                            <div class="project-card">
+                                <h4>Project #1</h4>
+                                <p>Description of your first major school project this year.</p>
+                                <p><strong>Skills Used:</strong> HTML, CSS, JavaScript</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Project #2</h4>
+                                <p>Another significant project from your coursework.</p>
+                                <p><strong>Skills Used:</strong> Unity, C#</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Collaborative Project</h4>
+                                <p>A project where you worked with classmates or in a team.</p>
+                                <p><strong>Role:</strong> Lead Developer</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Personal Project</h4>
+                                <p>Something you built on your own time to explore new skills.</p>
+                                <p><strong>Status:</strong> Ongoing</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showResumeSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>📄 Resume</h2>
+                        <div style="text-align: left; max-width: 600px; margin: 0 auto;">
+                            <h3>Micah Kennedy</h3>
+                            <p><strong>Senior Student | Web & Game Developer</strong></p>
+                            <p>📧 your.email@example.com | 📱 (555) 123-4567</p>
+                            
+                            <h3>Education</h3>
+                            <p><strong>High School Diploma</strong> - Expected [Year]<br>
+                            Focus: Computer Science & Digital Media</p>
+                            
+                            <h3>Technical Skills</h3>
+                            <div class="skills-grid">
+                                <div class="skill-tag">HTML/CSS</div>
+                                <div class="skill-tag">JavaScript</div>
+                                <div class="skill-tag">Three.js</div>
+                                <div class="skill-tag">Unity</div>
+                                <div class="skill-tag">C#</div>
+                                <div class="skill-tag">Figma</div>
+                                <div class="skill-tag">Blender</div>
+                            </div>
+                            
+                            <h3>Experience</h3>
+                            <p><strong>Student Developer</strong><br>
+                            • Built interactive 3D web experiences using Three.js<br>
+                            • Developed games in Unity with C#<br>
+                            • Created UI/UX designs in Figma</p>
+                            
+                            <h3>Projects</h3>
+                            <p><strong>3D Portfolio Website</strong> - Interactive desk environment showcasing work<br>
+                            <strong>Unity Games</strong> - Multiple game projects with various mechanics<br>
+                            <strong>Figma App Designs</strong> - Mobile and web application mockups</p>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+            
+            showArtworkSection() {
+                const content = `
+                    <div class="content-section">
+                        <h2>🎨 Artwork & Animations</h2>
+                        <p>Creative work including digital art, animations, and visual projects:</p>
+                        <div class="project-grid">
+                            <div class="project-card">
+                                <h4>Digital Illustrations</h4>
+                                <p>Original artwork created using digital tools and software.</p>
+                                <p><strong>Tools:</strong> Photoshop, Illustrator</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>3D Models</h4>
+                                <p>3D assets and models created in Blender for various projects.</p>
+                                <p><strong>Tools:</strong> Blender, Maya</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>Animations</h4>
+                                <p>Motion graphics and character animations for games and projects.</p>
+                                <p><strong>Tools:</strong> After Effects, Blender</p>
+                            </div>
+                            <div class="project-card">
+                                <h4>UI/UX Mockups</h4>
+                                <p>Interface designs and user experience prototypes.</p>
+                                <p><strong>Tools:</strong> Figma, Adobe XD</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showContent(content);
+            }
+        }
+
+        class PortfolioScene {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.controls = null;
+                
+                this.init();
+                this.animate();
+                
+                setTimeout(() => {
+                    document.getElementById('loading-screen').style.display = 'none';
+                }, 3000);
+            }
+            
+            init() {
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x1a1a2e);
+                
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(0, 5, 10);
+                
+                this.renderer = new THREE.WebGLRenderer({
+                    canvas: document.getElementById('three-canvas'),
+                    antialias: true
+                });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.05;
+                
+                this.createDesk();
+                this.addLighting();
+                
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+            
+            createDesk() {
+                const deskGeometry = new THREE.BoxGeometry(8, 0.2, 4);
+                const deskMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+                const desk = new THREE.Mesh(deskGeometry, deskMaterial);
+                desk.position.y = -0.1;
+                desk.receiveShadow = true;
+                this.scene.add(desk);
+                
+                this.addPlaceholderObjects();
+            }
+            
+            addPlaceholderObjects() {
+                // Laptop placeholder (for games)
+                const laptopGeometry = new THREE.BoxGeometry(2, 0.1, 1.5);
+                const laptopMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
+                const laptop = new THREE.Mesh(laptopGeometry, laptopMaterial);
+                laptop.position.set(-2, 0.15, 0);
+                laptop.castShadow = true;
+                this.scene.add(laptop);
+                
+                // Phone placeholder (for apps)
+                const phoneGeometry = new THREE.BoxGeometry(0.3, 0.05, 0.6);
+                const phoneMaterial = new THREE.MeshLambertMaterial({ color: 0x000000 });
+                const phone = new THREE.Mesh(phoneGeometry, phoneMaterial);
+                phone.position.set(2, 0.125, -1);
+                phone.castShadow = true;
+                this.scene.add(phone);
+                
+                // Notebook placeholder (for digital notebooks)
+                const notebookGeometry = new THREE.BoxGeometry(1, 0.1, 1.3);
+                const notebookMaterial = new THREE.MeshLambertMaterial({ color: 0x4169E1 });
+                const notebook = new THREE.Mesh(notebookGeometry, notebookMaterial);
+                notebook.position.set(1, 0.15, 1);
+                notebook.castShadow = true;
+                this.scene.add(notebook);
+                
+                // Business card placeholder (for about me)
+                const cardGeometry = new THREE.BoxGeometry(0.6, 0.02, 0.4);
+                const cardMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+                const businessCard = new THREE.Mesh(cardGeometry, cardMaterial);
+                businessCard.position.set(-1, 0.11, -1.5);
+                businessCard.castShadow = true;
+                this.scene.add(businessCard);
+                
+                // Folder placeholder (for projects)
+                const folderGeometry = new THREE.BoxGeometry(0.8, 0.05, 1.1);
+                const folderMaterial = new THREE.MeshLambertMaterial({ color: 0xDAA520 });
+                const folder = new THREE.Mesh(folderGeometry, folderMaterial);
+                folder.position.set(0, 0.125, -1.2);
+                folder.castShadow = true;
+                this.scene.add(folder);
+                
+                // Resume sheet placeholder
+                const resumeGeometry = new THREE.BoxGeometry(0.5, 0.01, 0.7);
+                const resumeMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff });
+                const resumeSheet = new THREE.Mesh(resumeGeometry, resumeMaterial);
+                resumeSheet.position.set(-2.5, 0.11, 1.2);
+                resumeSheet.rotation.z = 0.1;
+                resumeSheet.castShadow = true;
+                this.scene.add(resumeSheet);
+                
+                // iPad placeholder (for artwork & animations)
+                const ipadGeometry = new THREE.BoxGeometry(1.2, 0.08, 1.6);
+                const ipadMaterial = new THREE.MeshLambertMaterial({ color: 0x2c2c2c });
+                const ipad = new THREE.Mesh(ipadGeometry, ipadMaterial);
+                ipad.position.set(2.5, 0.14, 0.5);
+                ipad.rotation.y = -0.3;
+                ipad.castShadow = true;
+                this.scene.add(ipad);
+                
+                // Set up interactions for ALL objects
+                this.interactionManager = new InteractionManager(this.scene, this.camera, this.renderer);
+                this.interactionManager.addClickableObject(laptop, 'laptop');
+                this.interactionManager.addClickableObject(phone, 'phone');
+                this.interactionManager.addClickableObject(notebook, 'notebook');
+                this.interactionManager.addClickableObject(businessCard, 'businessCard');
+                this.interactionManager.addClickableObject(folder, 'folder');
+                this.interactionManager.addClickableObject(resumeSheet, 'resume');
+                this.interactionManager.addClickableObject(ipad, 'ipad');
+            }
+            
+            addLighting() {
+                const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(5, 10, 5);
+                directionalLight.castShadow = true;
+                directionalLight.shadow.mapSize.width = 2048;
+                directionalLight.shadow.mapSize.height = 2048;
+                this.scene.add(directionalLight);
+                
+                const pointLight = new THREE.PointLight(0xffa500, 0.6, 10);
+                pointLight.position.set(-3, 3, 2);
+                pointLight.castShadow = true;
+                this.scene.add(pointLight);
+            }
+            
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        // Initialize the portfolio scene
+        new PortfolioScene();
+    </script>
+</body>
+</html>
